@@ -1,158 +1,99 @@
 const express = require("express");
-const crypto = require("crypto");
-const nodemailer = require("nodemailer");
-
 const app = express();
+
 app.use(express.json());
-app.use(express.static("public"));
 
-/* ---------------- DB (temporary) ---------------- */
-const users = [];
-const classes = [];
-const invites = [];
-const memberships = [];
-const messages = [];
+const flashcardsDB = {}; // classId -> cards
 
-/* ---------------- EMAIL ---------------- */
-const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-        user: "your_email@gmail.com",
-        pass: "your_app_password"
-    }
-});
+/* ---------------- AI (optional) ---------------- */
+async function generateFlashcards(text) {
+    const fetch = (await import("node-fetch")).default;
 
-async function sendEmail(to, subject, text) {
-    await transporter.sendMail({
-        from: "Study Platform <your_email@gmail.com>",
-        to,
-        subject,
-        text
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+            "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [{
+                role: "user",
+                content: `
+Turn this into flashcards.
+Return JSON only: [{"front":"...","back":"..."}]
+
+Text:
+${text}
+`
+            }]
+        })
     });
+
+    const data = await res.json();
+
+    try {
+        return JSON.parse(data.choices[0].message.content);
+    } catch {
+        return [];
+    }
 }
 
-/* ---------------- UTIL ---------------- */
-const token = () => crypto.randomBytes(20).toString("hex");
+/* ---------------- TEACHER: CREATE FLASHCARDS ---------------- */
+app.post("/generate/:classId", async (req, res) => {
+    const { text } = req.body;
+    const { classId } = req.params;
 
-/* ---------------- CREATE CLASS ---------------- */
-app.post("/class/create", (req, res) => {
-    const { email, name } = req.body;
+    const cards = await generateFlashcards(text);
 
-    const classId = token();
+    flashcardsDB[classId] = cards;
 
-    classes.push({ id: classId, name });
-
-    memberships.push({
-        classId,
-        email,
-        role: "owner"
-    });
-
-    res.json({ classId });
+    res.json({ success: true, cards });
 });
 
-/* ---------------- INVITE STUDENT ---------------- */
-app.post("/invite/student", async (req, res) => {
-    const { email, classId } = req.body;
-
-    const t = token();
-
-    invites.push({
-        email,
-        classId,
-        role: "student",
-        token: t,
-        expires: Date.now() + 7 * 86400000
-    });
-
-    const link = `http://localhost:3000/join/${t}`;
-
-    await sendEmail(email, "Class Invite", link);
-
-    res.json({ link });
+/* ---------------- STUDENT: VIEW FLASHCARDS ---------------- */
+app.get("/flashcards/:classId", (req, res) => {
+    res.json(flashcardsDB[req.params.classId] || []);
 });
 
-/* ---------------- INVITE TEACHER ---------------- */
-app.post("/invite/teacher", async (req, res) => {
-    const { email, classId, role } = req.body;
+/* ---------------- FRONTEND ---------------- */
+app.get("/", (req, res) => {
+    res.send(`
+<h1>Study Platform</h1>
 
-    const t = token();
+<h2>Teacher</h2>
+<textarea id="text"></textarea>
+<br>
+<button onclick="generate()">Generate Flashcards</button>
 
-    invites.push({
-        email,
-        classId,
-        role: role || "co_teacher",
-        token: t,
-        expires: Date.now() + 7 * 86400000
-    });
+<h2>Student View</h2>
+<div id="cards"></div>
 
-    const link = `http://localhost:3000/join-teacher/${t}`;
+<script>
+const classId = "demo";
 
-    await sendEmail(email, "Teacher Invite", link);
+function generate() {
+    fetch("/generate/" + classId, {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ text: document.getElementById("text").value })
+    })
+    .then(r => r.json())
+    .then(d => alert("Flashcards created: " + d.cards.length));
+}
 
-    res.json({ link });
+fetch("/flashcards/" + classId)
+.then(r => r.json())
+.then(cards => {
+    document.getElementById("cards").innerHTML =
+        cards.map(c => \`
+            <div style="border:1px solid #ccc;margin:10px;padding:10px">
+                <b>\${c.front}</b><br>\${c.back}
+            </div>
+        \`).join("");
+});
+</script>
+    `);
 });
 
-/* ---------------- JOIN STUDENT ---------------- */
-app.get("/join/:token", (req, res) => {
-    const inv = invites.find(i => i.token === req.params.token);
-
-    if (!inv) return res.send("Invalid");
-    if (inv.expires < Date.now()) return res.send("Expired");
-
-    memberships.push({
-        classId: inv.classId,
-        email: inv.email,
-        role: "student"
-    });
-
-    res.send("Joined as student");
-});
-
-/* ---------------- JOIN TEACHER ---------------- */
-app.get("/join-teacher/:token", (req, res) => {
-    const inv = invites.find(i => i.token === req.params.token);
-
-    if (!inv) return res.send("Invalid");
-    if (inv.expires < Date.now()) return res.send("Expired");
-
-    memberships.push({
-        classId: inv.classId,
-        email: inv.email,
-        role: inv.role
-    });
-
-    res.send("Joined as " + inv.role);
-});
-
-/* ---------------- AI TUTOR (RULE-BASED) ---------------- */
-app.post("/ai/help", (req, res) => {
-    const { question } = req.body;
-
-    const banned = [
-        "answer",
-        "solve",
-        "do it for me",
-        "give solution"
-    ];
-
-    if (banned.some(b => question.toLowerCase().includes(b))) {
-        return res.json({
-            reply: "I can’t give direct answers. Try explaining what you understand so far."
-        });
-    }
-
-    res.json({
-        reply: "Break it into smaller steps. What part confuses you?"
-    });
-});
-
-/* ---------------- CLASS INFO ---------------- */
-app.get("/class/:id", (req, res) => {
-    res.json({
-        class: classes.find(c => c.id === req.params.id),
-        members: memberships.filter(m => m.classId === req.params.id)
-    });
-});
-
-app.listen(3000, () => console.log("http://localhost:3000"));
+app.listen(3000, () => console.log("Running"));
