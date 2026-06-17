@@ -1,0 +1,40 @@
+<h1>Teacher Dashboard</h1>
+
+<input id="email" placeholder="student email">
+<button onclick="inviteStudent()">Invite Student</button>
+
+<br><br>
+
+<input id="tEmail" placeholder="teacher email">
+<select id="role">
+  <option value="co_teacher">Co-teacher</option>
+  <option value="substitute">Substitute</option>
+</select>
+<button onclick="inviteTeacher()">Invite Teacher</button>
+
+<script>
+const classId = prompt("Enter class ID");
+
+function inviteStudent() {
+    fetch("/invite/student", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+            email: email.value,
+            classId
+        })
+    });
+}
+
+function inviteTeacher() {
+    fetch("/invite/teacher", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+            email: tEmail.value,
+            classId,
+            role: role.value
+        })
+    });
+}
+</script>
