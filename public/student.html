@@ -1,0 +1,18 @@
+<h1>Student AI Tutor</h1>
+
+<input id="q" placeholder="Ask question">
+<button onclick="ask()">Ask</button>
+
+<p id="out"></p>
+
+<script>
+function ask() {
+    fetch("/ai/help", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ question: q.value })
+    })
+    .then(r => r.json())
+    .then(d => out.innerText = d.reply);
+}
+</script>
